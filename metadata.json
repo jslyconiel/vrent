@@ -1,0 +1,8 @@
+{
+  "name": "VRENT. - Boarding House & Room Rental Platform",
+  "description": "Find boarding houses, dorms, bedspaces, and studios with 360° virtual previews, distance sorting, and direct owner bookings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
