@@ -10,6 +10,23 @@
   --color-brand-gold: #d4af37;
 }
 
+@layer base {
+  html {
+    font-size: 18px;
+  }
+
+  @media (max-width: 640px) {
+    html {
+      font-size: 16.5px;
+    }
+  }
+
+  body {
+    font-size: 1rem;
+    line-height: 1.6;
+  }
+}
+
 /* Custom scrollbar and utilities */
 ::-webkit-scrollbar {
   width: 8px;

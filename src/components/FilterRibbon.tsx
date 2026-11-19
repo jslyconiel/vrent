@@ -8,13 +8,13 @@ interface FilterRibbonProps {
 
 const BADGES = [
   'Student friendly',
+  'Water Included',
+  'Near campus',
+  'Wi-Fi ready',
+  'Mixed',
+  'Female Only',
   'Bedspaces',
   'Private rooms',
-  'Studios',
-  'Dorm beds',
-  'Near campus',
-  'Near the port',
-  'Wi-Fi ready',
 ];
 
 export const FilterRibbon: React.FC<FilterRibbonProps> = ({ activeTag, onTagToggle }) => {

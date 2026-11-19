@@ -9,13 +9,11 @@ import {
   Compass,
   ZoomIn,
   ZoomOut,
-  Maximize2,
   Sparkles,
   Smartphone,
-  CheckCircle,
-  AlertCircle,
   RefreshCw,
-  Sliders,
+  Video,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { Room } from '../types';
 
@@ -43,6 +41,21 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasMountRef = useRef<HTMLDivElement>(null);
 
+  // Determine initial tour mode based on whether owner uploaded video or panorama
+  const getInitialTourSource = (): 'owner-video' | 'owner-panorama' | 'virtual-3d' => {
+    if (room.roomMedia?.type === 'video') return 'owner-video';
+    if (room.roomMedia?.type === 'panorama') return 'owner-panorama';
+    return 'virtual-3d';
+  };
+
+  const [tourSource, setTourSource] = useState<'owner-video' | 'owner-panorama' | 'virtual-3d'>(
+    getInitialTourSource
+  );
+
+  useEffect(() => {
+    setTourSource(getInitialTourSource());
+  }, [room.id, room.roomMedia?.type, room.roomMedia?.url]);
+
   // Tour controls state
   const [isNightMode, setIsNightMode] = useState(false);
   const [isVRMode, setIsVRMode] = useState(false);
@@ -56,11 +69,8 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
 
   // Device Orientation / Gyroscope state
   const [isGyroActive, setIsGyroActive] = useState(false);
-  const [gyroSupported, setGyroSupported] = useState(true);
-  const [gyroPermissionStatus, setGyroPermissionStatus] = useState<
-    'idle' | 'granted' | 'denied' | 'unsupported'
-  >('idle');
   const [showGyroPrompt, setShowGyroPrompt] = useState(false);
+  const [gyroNotice, setGyroNotice] = useState<string | null>(null);
   const [currentTilt, setCurrentTilt] = useState({ pitch: 0, roll: 0 });
 
   // References for Three.js
@@ -77,7 +87,7 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
     gamma: 0,
   });
   const screenOrientationAngleRef = useRef(0);
-  const manualYawOffsetRef = useRef(0); // Offset for manual swipe during gyro or recalibration
+  const manualYawOffsetRef = useRef(0);
 
   // Spherical camera rotation coordinates (for manual / non-gyro mode)
   const lonRef = useRef(90);
@@ -152,15 +162,6 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
       setShowGyroPrompt(true);
     }
 
-    const checkSupport = () => {
-      if (!window.DeviceOrientationEvent) {
-        setGyroSupported(false);
-        setGyroPermissionStatus('unsupported');
-      }
-    };
-    checkSupport();
-
-    // Update screen orientation angle on rotate
     const updateScreenOrientation = () => {
       screenOrientationAngleRef.current =
         window.screen?.orientation?.angle ||
@@ -178,7 +179,7 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
   }, []);
 
   // Procedural 360 Equirectangular Canvas Generator
-  const generateEquirectangularTexture = (isNight: boolean, theme: string) => {
+  const generateEquirectangularTexture = (isNight: boolean) => {
     const width = 2048;
     const height = 1024;
     const canvas = document.createElement('canvas');
@@ -406,31 +407,32 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
     const zee = new THREE.Vector3(0, 0, 1);
     const euler = new THREE.Euler();
     const q0 = new THREE.Quaternion();
-    const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // - PI/2 around the x-axis
+    const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
 
     const _alpha = alpha ? alpha * degToRad : 0;
     const _beta = beta ? beta * degToRad : 0;
     const _gamma = gamma ? gamma * degToRad : 0;
     const _orient = orient ? orient * degToRad : 0;
 
-    euler.set(_beta, _alpha, -_gamma, 'YXZ'); // Camera takes 'YXZ'
+    euler.set(_beta, _alpha, -_gamma, 'YXZ');
     quaternion.setFromEuler(euler);
-    quaternion.multiply(q1); // Camera looks out the back of the device
-    quaternion.multiply(q0.setFromAxisAngle(zee, -_orient)); // Adjust for device orientation angle
+    quaternion.multiply(q1);
+    quaternion.multiply(q0.setFromAxisAngle(zee, -_orient));
   };
 
-  // Mount Three.js 360 Spherical VR Scene inside dedicated canvasMountRef
+  // Mount Three.js 360 Spherical VR Scene when viewing 360 panorama or virtual 3D
   useEffect(() => {
+    if (tourSource === 'owner-video') return;
+
     const canvasContainer = canvasMountRef.current;
     const viewport = viewportRef.current;
     if (!canvasContainer || !viewport) return;
 
-    // 1. Scene, CameraGroup, Camera, Renderer
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    const width = viewport.clientWidth;
-    const height = viewport.clientHeight;
+    const width = viewport.clientWidth || 800;
+    const height = viewport.clientHeight || 500;
 
     const cameraGroup = new THREE.Group();
     scene.add(cameraGroup);
@@ -451,31 +453,50 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     rendererRef.current = renderer;
 
-    // Isolate canvas mount: only empty canvasContainer, NEVER touching React sibling nodes!
     canvasContainer.innerHTML = '';
     canvasContainer.appendChild(renderer.domElement);
 
-    // 2. 360 Inverted Sphere Geometry
     const sphereGeometry = new THREE.SphereGeometry(500, 64, 40);
     sphereGeometry.scale(-1, 1, 1);
 
-    const texture = generateEquirectangularTexture(isNightMode, room.illustrationTheme);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.minFilter = THREE.LinearFilter;
+    let activeTexture: THREE.Texture = generateEquirectangularTexture(isNightMode);
+    activeTexture.colorSpace = THREE.SRGBColorSpace;
+    activeTexture.minFilter = THREE.LinearFilter;
 
     const sphereMaterial = new THREE.MeshBasicMaterial({
-      map: texture,
+      map: activeTexture,
     });
 
     const sphereMesh = new THREE.Mesh(sphereGeometry, sphereMaterial);
     scene.add(sphereMesh);
     sphereMeshRef.current = sphereMesh;
 
-    // 3. Animation loop with smooth damping and orientation integration
+    // Load owner-uploaded panorama image if selected
+    if (tourSource === 'owner-panorama' && room.roomMedia?.type === 'panorama') {
+      const loader = new THREE.TextureLoader();
+      loader.load(
+        room.roomMedia.url,
+        (loadedTex) => {
+          loadedTex.colorSpace = THREE.SRGBColorSpace;
+          loadedTex.minFilter = THREE.LinearFilter;
+          activeTexture.dispose();
+          activeTexture = loadedTex;
+          sphereMaterial.map = loadedTex;
+          sphereMaterial.needsUpdate = true;
+        },
+        undefined,
+        () => {
+          // Keep procedural fallback if image URL blocked by CORS
+        }
+      );
+    }
+
     let animationFrameId: number;
 
     const updateHotspotScreenPositions = () => {
-      if (!cameraRef.current || !viewportRef.current) return;
+      if (!cameraRef.current || !viewportRef.current || tourSource !== 'virtual-3d') {
+        return;
+      }
 
       const halfW = viewportRef.current.clientWidth / 2;
       const halfH = viewportRef.current.clientHeight / 2;
@@ -511,14 +532,12 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
       animationFrameId = requestAnimationFrame(animate);
 
       if (isGyroActive) {
-        // Physical phone orientation tracking via DeviceOrientation API
         const { alpha, beta, gamma } = deviceOrientationRef.current;
         const orient = screenOrientationAngleRef.current;
 
         setDeviceOrientationQuaternion(camera.quaternion, alpha, beta, gamma, orient);
         cameraGroup.rotation.y = manualYawOffsetRef.current;
       } else {
-        // Standard manual touch / mouse drag controls with damping
         if (autoRotate && !isPointerDownRef.current) {
           targetLonRef.current += 0.08;
         }
@@ -543,7 +562,6 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
         camera.lookAt(lookTarget);
       }
 
-      // Compute camera forward vector for Compass HUD
       const forwardDir = new THREE.Vector3(0, 0, -1);
       forwardDir.applyQuaternion(camera.quaternion);
       if (cameraGroup.rotation.y !== 0) {
@@ -552,7 +570,6 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
       const heading = Math.round((Math.atan2(forwardDir.x, forwardDir.z) * (180 / Math.PI) + 360) % 360);
       setCompassHeading(heading);
 
-      // Render standard or dual-eye stereoscopic VR
       if (isVRMode) {
         const fullW = viewportRef.current?.clientWidth || width;
         const fullH = viewportRef.current?.clientHeight || height;
@@ -560,14 +577,12 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
 
         renderer.setScissorTest(true);
 
-        // Left Eye
         renderer.setScissor(0, 0, halfEyeW, fullH);
         renderer.setViewport(0, 0, halfEyeW, fullH);
         camera.aspect = halfEyeW / fullH;
         camera.updateProjectionMatrix();
         renderer.render(scene, camera);
 
-        // Right Eye
         renderer.setScissor(halfEyeW, 0, halfEyeW, fullH);
         renderer.setViewport(halfEyeW, 0, halfEyeW, fullH);
         camera.aspect = halfEyeW / fullH;
@@ -603,11 +618,10 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
       renderer.dispose();
       sphereGeometry.dispose();
       sphereMaterial.dispose();
-      texture.dispose();
+      activeTexture.dispose();
     };
-  }, [isNightMode, isVRMode, autoRotate, fov, isGyroActive, room.illustrationTheme]);
+  }, [isNightMode, isVRMode, autoRotate, fov, isGyroActive, tourSource, room.roomMedia?.url]);
 
-  // Handle Device Orientation listener
   const handleDeviceOrientation = (e: DeviceOrientationEvent) => {
     if (e.alpha !== null && e.beta !== null && e.gamma !== null) {
       deviceOrientationRef.current = {
@@ -624,14 +638,13 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
       if (!isGyroActive) {
         setIsGyroActive(true);
         setAutoRotate(false);
-        setGyroPermissionStatus('granted');
         setShowGyroPrompt(false);
       }
     }
   };
 
-  // Request Gyroscope Permission (required for iOS 13+ Safari & modern browsers)
   const toggleGyroscope = async () => {
+    setGyroNotice(null);
     if (isGyroActive) {
       window.removeEventListener('deviceorientation', handleDeviceOrientation);
       window.removeEventListener('deviceorientationabsolute', handleDeviceOrientation as any);
@@ -649,38 +662,30 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
           window.addEventListener('deviceorientation', handleDeviceOrientation);
           setIsGyroActive(true);
           setAutoRotate(false);
-          setGyroPermissionStatus('granted');
           setShowGyroPrompt(false);
         } else {
-          setGyroPermissionStatus('denied');
-          alert('Motion sensor permission was denied. Please allow motion sensors in your browser settings.');
+          setGyroNotice('Motion sensor permission was denied in browser settings.');
         }
-      } catch (err) {
-        console.warn('Error requesting device orientation permission:', err);
-        setGyroPermissionStatus('denied');
+      } catch {
+        setGyroNotice('Unable to access motion sensor on this device.');
       }
     } else if (window.DeviceOrientationEvent) {
       window.addEventListener('deviceorientation', handleDeviceOrientation);
       window.addEventListener('deviceorientationabsolute', handleDeviceOrientation as any);
       setIsGyroActive(true);
       setAutoRotate(false);
-      setGyroPermissionStatus('granted');
       setShowGyroPrompt(false);
     } else {
-      setGyroSupported(false);
-      setGyroPermissionStatus('unsupported');
-      alert('Device Orientation sensor is not supported on this browser or hardware.');
+      setGyroNotice('Motion sensors are not supported on this browser.');
     }
   };
 
-  // Recalibrate current forward view
   const handleRecalibrate = () => {
     if (!isGyroActive) return;
     const { alpha } = deviceOrientationRef.current;
     manualYawOffsetRef.current = -alpha * (Math.PI / 180);
   };
 
-  // FOV Zoom Handlers
   const handleZoom = (delta: number) => {
     setFov((prev) => {
       const nextFov = Math.max(35, Math.min(95, prev + delta));
@@ -693,11 +698,11 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
   };
 
   const handleWheel = (e: React.WheelEvent) => {
+    if (tourSource === 'owner-video') return;
     e.preventDefault();
     handleZoom(e.deltaY * 0.04);
   };
 
-  // Pointer event handlers (supports swipe pan even when gyro is active)
   const handlePointerDown = (e: React.PointerEvent) => {
     isPointerDownRef.current = true;
     onPointerDownPointerXRef.current = e.clientX;
@@ -726,7 +731,6 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
     isPointerDownRef.current = false;
   };
 
-  // Clean up orientation listener on unmount
   useEffect(() => {
     return () => {
       window.removeEventListener('deviceorientation', handleDeviceOrientation);
@@ -735,310 +739,361 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-md animate-fade-in select-none">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-md select-none">
       <div className="relative w-full max-w-5xl bg-stone-950 rounded-3xl overflow-hidden border border-stone-700 shadow-2xl flex flex-col h-[94vh]">
         {/* Top Control Bar */}
-        <div className="px-5 py-3.5 bg-stone-900/95 border-b border-stone-800 flex items-center justify-between text-white z-20">
+        <div className="px-5 py-3.5 bg-stone-900/95 border-b border-stone-800 flex flex-wrap items-center justify-between gap-3 text-white z-20">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#e05d26]/20 border border-[#e05d26]/40 flex items-center justify-center text-[#e05d26]">
-              <Glasses className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-xl bg-[#e05d26]/20 border border-[#e05d26]/40 flex items-center justify-center text-[#e05d26]">
+              {tourSource === 'owner-video' ? (
+                <Video className="w-5 h-5" />
+              ) : (
+                <Glasses className="w-5 h-5" />
+              )}
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-bold text-sm sm:text-base text-white">{room.title}</h3>
-                <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  Spherical 360° / VR
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-bold text-base sm:text-lg text-white">{room.title}</h3>
+                <span className="text-xs uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  {tourSource === 'owner-video'
+                    ? 'Owner Video'
+                    : tourSource === 'owner-panorama'
+                    ? 'Owner 360° Panorama'
+                    : 'Interactive 360° VR'}
                 </span>
               </div>
-              <p className="text-[11px] text-stone-400">{room.location}</p>
+              <p className="text-xs sm:text-sm text-stone-400">{room.location}</p>
             </div>
           </div>
 
           {/* Quick Action Tools */}
-          <div className="flex items-center gap-2">
-            {/* Mobile Gyro / Device Orientation Button */}
-            <button
-              onClick={toggleGyroscope}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition cursor-pointer ${
-                isGyroActive
-                  ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg shadow-emerald-600/30 ring-2 ring-emerald-400/50'
-                  : 'bg-stone-800 text-stone-300 border-stone-700 hover:bg-stone-700'
-              }`}
-              title={isGyroActive ? 'Click to disable gyroscope' : 'Enable phone motion sensor control'}
-            >
-              <Smartphone
-                className={`w-3.5 h-3.5 ${isGyroActive ? 'animate-bounce text-white' : 'text-amber-400'}`}
-              />
-              <span>{isGyroActive ? 'Gyro Tracking ON' : 'Enable Gyro'}</span>
-            </button>
-
-            {/* Recalibrate Center (Visible when gyro is active) */}
-            {isGyroActive && (
-              <button
-                onClick={handleRecalibrate}
-                className="px-2.5 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-300 text-xs font-semibold border border-stone-700 flex items-center gap-1 cursor-pointer"
-                title="Recalibrate forward direction"
-              >
-                <RefreshCw className="w-3 h-3" />
-                <span className="hidden sm:inline">Center</span>
-              </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Switch between Owner Uploaded Media and Interactive 3D */}
+            {room.roomMedia && (
+              <div className="flex items-center p-1 rounded-xl bg-stone-800 border border-stone-700">
+                <button
+                  onClick={() =>
+                    setTourSource(
+                      room.roomMedia!.type === 'video' ? 'owner-video' : 'owner-panorama'
+                    )
+                  }
+                  className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                    tourSource !== 'virtual-3d'
+                      ? 'bg-[#e05d26] text-white'
+                      : 'text-stone-300 hover:text-white'
+                  }`}
+                >
+                  {room.roomMedia.type === 'video' ? (
+                    <Video className="w-3.5 h-3.5" />
+                  ) : (
+                    <ImageIcon className="w-3.5 h-3.5" />
+                  )}
+                  <span>{room.roomMedia.type === 'video' ? 'Owner Video' : 'Owner 360°'}</span>
+                </button>
+                <button
+                  onClick={() => setTourSource('virtual-3d')}
+                  className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                    tourSource === 'virtual-3d'
+                      ? 'bg-[#e05d26] text-white'
+                      : 'text-stone-300 hover:text-white'
+                  }`}
+                >
+                  <Glasses className="w-3.5 h-3.5" />
+                  <span>3D Model</span>
+                </button>
+              </div>
             )}
 
-            {/* Day / Night Ambient Switcher */}
-            <button
-              onClick={() => setIsNightMode(!isNightMode)}
-              className="px-3 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs flex items-center gap-1.5 border border-stone-700 cursor-pointer"
-              title="Toggle Day/Night study atmosphere"
-            >
-              {isNightMode ? (
-                <>
-                  <Moon className="w-3.5 h-3.5 text-amber-300" />
-                  <span className="hidden sm:inline">Night</span>
-                </>
-              ) : (
-                <>
-                  <Sun className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="hidden sm:inline">Day</span>
-                </>
-              )}
-            </button>
+            {tourSource !== 'owner-video' && (
+              <>
+                <button
+                  onClick={toggleGyroscope}
+                  className={`px-3 py-1.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 border transition cursor-pointer ${
+                    isGyroActive
+                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg'
+                      : 'bg-stone-800 text-stone-300 border-stone-700 hover:bg-stone-700'
+                  }`}
+                >
+                  <Smartphone className="w-4 h-4 text-amber-400" />
+                  <span className="hidden sm:inline">{isGyroActive ? 'Gyro ON' : 'Gyro'}</span>
+                </button>
 
-            {/* VR Cardboard Goggles Mode */}
-            <button
-              onClick={() => setIsVRMode(!isVRMode)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition cursor-pointer ${
-                isVRMode
-                  ? 'bg-[#e05d26] text-white border-[#e05d26] shadow-md'
-                  : 'bg-stone-800 text-stone-300 border-stone-700 hover:bg-stone-700'
-              }`}
-              title="Split-screen for Cardboard / VR Headsets"
-            >
-              <Glasses className="w-3.5 h-3.5" />
-              <span>{isVRMode ? 'Stereo VR' : 'VR Goggles'}</span>
-            </button>
+                {isGyroActive && (
+                  <button
+                    onClick={handleRecalibrate}
+                    className="px-2.5 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-300 text-xs sm:text-sm font-semibold border border-stone-700 flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Center</span>
+                  </button>
+                )}
 
-            {/* Auto Orbit */}
-            <button
-              onClick={() => setAutoRotate(!autoRotate)}
-              disabled={isGyroActive}
-              className={`p-2 rounded-xl text-xs border cursor-pointer ${
-                autoRotate
-                  ? 'bg-[#e05d26]/20 text-[#e05d26] border-[#e05d26]/40'
-                  : 'bg-stone-800 text-stone-300 border-stone-700'
-              } ${isGyroActive ? 'opacity-40 cursor-not-allowed' : ''}`}
-              title={isGyroActive ? 'Auto-rotate disabled while gyro is active' : 'Auto orbit'}
-            >
-              <RotateCw className={`w-4 h-4 ${autoRotate && !isGyroActive ? 'animate-spin' : ''}`} />
-            </button>
+                {tourSource === 'virtual-3d' && (
+                  <button
+                    onClick={() => setIsNightMode(!isNightMode)}
+                    className="px-3 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs sm:text-sm flex items-center gap-1.5 border border-stone-700 cursor-pointer"
+                  >
+                    {isNightMode ? (
+                      <>
+                        <Moon className="w-4 h-4 text-amber-300" />
+                        <span className="hidden sm:inline">Night</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sun className="w-4 h-4 text-amber-400" />
+                        <span className="hidden sm:inline">Day</span>
+                      </>
+                    )}
+                  </button>
+                )}
 
-            {/* Close */}
+                <button
+                  onClick={() => setIsVRMode(!isVRMode)}
+                  className={`px-3 py-1.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 border transition cursor-pointer ${
+                    isVRMode
+                      ? 'bg-[#e05d26] text-white border-[#e05d26]'
+                      : 'bg-stone-800 text-stone-300 border-stone-700 hover:bg-stone-700'
+                  }`}
+                >
+                  <Glasses className="w-4 h-4" />
+                  <span className="hidden sm:inline">{isVRMode ? 'Stereo VR' : 'VR'}</span>
+                </button>
+
+                <button
+                  onClick={() => setAutoRotate(!autoRotate)}
+                  disabled={isGyroActive}
+                  className={`p-2 rounded-xl text-xs border cursor-pointer ${
+                    autoRotate
+                      ? 'bg-[#e05d26]/20 text-[#e05d26] border-[#e05d26]/40'
+                      : 'bg-stone-800 text-stone-300 border-stone-700'
+                  } ${isGyroActive ? 'opacity-40 cursor-not-allowed' : ''}`}
+                  title="Auto orbit"
+                >
+                  <RotateCw className={`w-4 h-4 ${autoRotate && !isGyroActive ? 'animate-spin' : ''}`} />
+                </button>
+              </>
+            )}
+
             <button
               onClick={onClose}
               className="p-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white transition cursor-pointer"
-              title="Close 360 preview"
+              title="Close preview"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        {/* Interactive 360 VR Canvas Viewport */}
-        <div
-          ref={viewportRef}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-          onWheel={handleWheel}
-          className="relative flex-1 w-full overflow-hidden bg-black cursor-grab active:cursor-grabbing touch-none select-none"
-        >
-          {/* Isolated WebGL canvas container - Contains NO React virtual DOM children */}
-          <div ref={canvasMountRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+        {/* Inline gyro warning notice if denied/unsupported */}
+        {gyroNotice && (
+          <div className="px-5 py-2 bg-amber-900/90 text-amber-100 text-xs sm:text-sm text-center border-b border-amber-700">
+            {gyroNotice}
+          </div>
+        )}
 
-          {/* Compass & Orientation HUD (Top Left) */}
-          <div className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-stone-900/85 backdrop-blur-md px-3.5 py-1.5 rounded-full border border-stone-700 text-white text-xs font-mono pointer-events-none shadow-lg">
-            <Compass
-              className="w-4 h-4 text-[#e05d26]"
-              style={{ transform: `rotate(${-compassHeading}deg)` }}
+        {/* Viewport: Owner Walkthrough Video OR Three.js 360° Sphere */}
+        {tourSource === 'owner-video' && room.roomMedia ? (
+          <div className="relative flex-1 w-full bg-black flex flex-col items-center justify-center overflow-hidden">
+            <video
+              src={room.roomMedia.url}
+              controls
+              autoPlay
+              playsInline
+              className="w-full h-full object-contain bg-black"
             />
-            <span>{compassHeading}°</span>
-            <span className="text-[10px] text-amber-300 font-bold">
-              {compassHeading >= 315 || compassHeading < 45
-                ? 'N'
-                : compassHeading < 135
-                ? 'E'
-                : compassHeading < 225
-                ? 'S'
-                : 'W'}
-            </span>
-            {isGyroActive && (
-              <span className="border-l border-stone-700 pl-2 text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span>Pitch: {currentTilt.pitch}°</span>
-              </span>
+            {room.roomMedia.caption && (
+              <div className="absolute top-4 left-4 bg-stone-900/85 backdrop-blur-md px-4 py-2 rounded-full border border-stone-700 text-white text-sm font-medium shadow-lg">
+                {room.roomMedia.caption}
+              </div>
             )}
           </div>
+        ) : (
+          <div
+            ref={viewportRef}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            onWheel={handleWheel}
+            className="relative flex-1 w-full overflow-hidden bg-black cursor-grab active:cursor-grabbing touch-none select-none"
+          >
+            <div ref={canvasMountRef} className="absolute inset-0 w-full h-full pointer-events-none" />
 
-          {/* Zoom Controls (Top Right) */}
-          <div className="absolute top-4 right-4 z-20 flex flex-col gap-1.5 bg-stone-900/80 backdrop-blur-md p-1.5 rounded-2xl border border-stone-700 shadow-lg">
-            <button
-              onClick={() => handleZoom(-10)}
-              className="p-1.5 text-stone-300 hover:text-white hover:bg-stone-800 rounded-lg cursor-pointer"
-              title="Zoom In"
-            >
-              <ZoomIn className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => handleZoom(10)}
-              className="p-1.5 text-stone-300 hover:text-white hover:bg-stone-800 rounded-lg cursor-pointer"
-              title="Zoom Out"
-            >
-              <ZoomOut className="w-4 h-4" />
-            </button>
-          </div>
+            {/* Compass & Orientation HUD */}
+            <div className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-stone-900/85 backdrop-blur-md px-4 py-1.5 rounded-full border border-stone-700 text-white text-sm font-mono pointer-events-none shadow-lg">
+              <Compass
+                className="w-4 h-4 text-[#e05d26]"
+                style={{ transform: `rotate(${-compassHeading}deg)` }}
+              />
+              <span>{compassHeading}°</span>
+              <span className="text-xs text-amber-300 font-bold">
+                {compassHeading >= 315 || compassHeading < 45
+                  ? 'N'
+                  : compassHeading < 135
+                  ? 'E'
+                  : compassHeading < 225
+                  ? 'S'
+                  : 'W'}
+              </span>
+              {isGyroActive && (
+                <span className="border-l border-stone-700 pl-2 text-xs text-emerald-400 font-semibold flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>Pitch: {currentTilt.pitch}°</span>
+                </span>
+              )}
+            </div>
 
-          {/* Mobile One-Tap Gyroscope Enable Prompt Banner (Appears on mobile if not active) */}
-          {showGyroPrompt && !isGyroActive && (
-            <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 w-[90%] max-w-sm bg-gradient-to-r from-stone-900 to-[#1e2a28] border border-amber-500/40 rounded-2xl p-3.5 shadow-2xl backdrop-blur-md text-white flex items-center justify-between gap-3 animate-fade-in">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
-                  <Smartphone className="w-5 h-5 animate-bounce" />
-                </div>
-                <div>
-                  <h5 className="text-xs font-bold text-amber-200">Mobile Motion Control</h5>
-                  <p className="text-[11px] text-stone-300 leading-tight">
-                    Rotate your phone physically to explore the room in 3D.
-                  </p>
-                </div>
-              </div>
+            {/* Zoom Controls */}
+            <div className="absolute top-4 right-4 z-20 flex flex-col gap-1.5 bg-stone-900/80 backdrop-blur-md p-1.5 rounded-2xl border border-stone-700 shadow-lg">
               <button
-                onClick={toggleGyroscope}
-                className="px-3.5 py-2 rounded-xl bg-[#e05d26] hover:bg-[#c94f1c] text-white text-xs font-bold shrink-0 shadow-md cursor-pointer"
+                onClick={() => handleZoom(-10)}
+                className="p-2 text-stone-300 hover:text-white hover:bg-stone-800 rounded-lg cursor-pointer"
+                title="Zoom In"
               >
-                Enable
+                <ZoomIn className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => handleZoom(10)}
+                className="p-2 text-stone-300 hover:text-white hover:bg-stone-800 rounded-lg cursor-pointer"
+                title="Zoom Out"
+              >
+                <ZoomOut className="w-4 h-4" />
               </button>
             </div>
-          )}
 
-          {/* Active Gyro Floating Pill indicator */}
-          {isGyroActive && (
-            <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 bg-stone-900/90 border border-emerald-500/50 rounded-full px-4 py-1.5 text-xs text-emerald-300 flex items-center gap-2 shadow-xl backdrop-blur-md">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-              <span className="font-semibold">Motion Sensor Active</span>
-              <span className="text-stone-400 text-[11px] hidden sm:inline">• Rotate phone in any direction</span>
-            </div>
-          )}
-
-          {/* 3D Hotspot Screen Overlay Elements (Only in standard mode) */}
-          {!isVRMode &&
-            hotspotScreenPositions.map(({ id, x, y, visible, spot }) => {
-              if (!visible) return null;
-              const isActive = activeHotspot?.id === id;
-
-              return (
-                <div
-                  key={id}
-                  style={{
-                    left: `${x}px`,
-                    top: `${y}px`,
-                    transform: 'translate(-50%, -50%)',
-                  }}
-                  className="absolute z-20 pointer-events-auto"
-                >
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveHotspot(isActive ? null : spot);
-                    }}
-                    className={`relative p-2 rounded-full cursor-pointer transition transform hover:scale-125 ${
-                      isActive
-                        ? 'bg-[#e05d26] text-white ring-4 ring-[#e05d26]/40 scale-110'
-                        : 'bg-white/95 text-stone-900 shadow-xl hover:bg-white'
-                    }`}
-                    title={spot.title}
-                  >
-                    <span className="text-xs">{spot.icon}</span>
-                  </button>
-
-                  {/* Hotspot Floating Description Box */}
-                  {isActive && (
-                    <div
-                      onClick={(e) => e.stopPropagation()}
-                      className="absolute left-1/2 -translate-x-1/2 bottom-full mb-3 w-60 p-3 rounded-2xl bg-stone-900/95 border border-stone-700 text-white shadow-2xl backdrop-blur-md z-30"
-                    >
-                      <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-stone-800">
-                        <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                          <span>{spot.icon}</span>
-                          <span>{spot.title}</span>
-                        </span>
-                        <button
-                          onClick={() => setActiveHotspot(null)}
-                          className="text-stone-400 hover:text-white"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                      <p className="text-[11px] text-stone-300 leading-relaxed">{spot.desc}</p>
-                    </div>
-                  )}
+            {showGyroPrompt && !isGyroActive && (
+              <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 w-[90%] max-w-sm bg-gradient-to-r from-stone-900 to-[#1e2a28] border border-amber-500/40 rounded-2xl p-3.5 shadow-2xl backdrop-blur-md text-white flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0">
+                    <Smartphone className="w-5 h-5 animate-bounce" />
+                  </div>
+                  <div>
+                    <h5 className="text-sm font-bold text-amber-200">Mobile Motion Control</h5>
+                    <p className="text-xs text-stone-300 leading-tight">
+                      Rotate your phone to look around in 360°.
+                    </p>
+                  </div>
                 </div>
-              );
-            })}
+                <button
+                  onClick={toggleGyroscope}
+                  className="px-3.5 py-2 rounded-xl bg-[#e05d26] hover:bg-[#c94f1c] text-white text-xs sm:text-sm font-bold shrink-0 shadow-md cursor-pointer"
+                >
+                  Enable
+                </button>
+              </div>
+            )}
 
-          {/* Center divider line in VR mode */}
-          {isVRMode && (
-            <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[2px] bg-white/30 pointer-events-none z-30 flex items-center justify-center">
-              <span className="bg-black text-white text-[9px] px-2 py-0.5 rounded-full border border-stone-700">
-                Center Divider
+            {/* Hotspots in Virtual 3D mode */}
+            {!isVRMode &&
+              tourSource === 'virtual-3d' &&
+              hotspotScreenPositions.map(({ id, x, y, visible, spot }) => {
+                if (!visible) return null;
+                const isActive = activeHotspot?.id === id;
+
+                return (
+                  <div
+                    key={id}
+                    style={{
+                      left: `${x}px`,
+                      top: `${y}px`,
+                      transform: 'translate(-50%, -50%)',
+                    }}
+                    className="absolute z-20 pointer-events-auto"
+                  >
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveHotspot(isActive ? null : spot);
+                      }}
+                      className={`relative p-2.5 rounded-full cursor-pointer transition transform hover:scale-125 ${
+                        isActive
+                          ? 'bg-[#e05d26] text-white ring-4 ring-[#e05d26]/40 scale-110'
+                          : 'bg-white/95 text-stone-900 shadow-xl hover:bg-white'
+                      }`}
+                      title={spot.title}
+                    >
+                      <span className="text-sm">{spot.icon}</span>
+                    </button>
+
+                    {isActive && (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="absolute left-1/2 -translate-x-1/2 bottom-full mb-3 w-64 p-3.5 rounded-2xl bg-stone-900/95 border border-stone-700 text-white shadow-2xl backdrop-blur-md z-30"
+                      >
+                        <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-stone-800">
+                          <span className="text-sm font-bold text-amber-300 flex items-center gap-1.5">
+                            <span>{spot.icon}</span>
+                            <span>{spot.title}</span>
+                          </span>
+                          <button
+                            onClick={() => setActiveHotspot(null)}
+                            className="text-stone-400 hover:text-white cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <p className="text-xs sm:text-sm text-stone-300 leading-relaxed">{spot.desc}</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+            {isVRMode && (
+              <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[2px] bg-white/30 pointer-events-none z-30 flex items-center justify-center">
+                <span className="bg-black text-white text-xs px-2.5 py-0.5 rounded-full border border-stone-700">
+                  Center Divider
+                </span>
+              </div>
+            )}
+
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-stone-900/85 backdrop-blur-md px-4 py-2 rounded-full border border-stone-700 text-stone-200 text-xs sm:text-sm font-medium pointer-events-none flex items-center gap-2 shadow-xl whitespace-nowrap">
+              <Sparkles className="w-4 h-4 text-[#e05d26]" />
+              <span>
+                {tourSource === 'owner-panorama' && room.roomMedia?.caption
+                  ? `${room.roomMedia.caption} · Drag to look around 360°`
+                  : isGyroActive
+                  ? 'Tilt/turn phone or swipe to adjust orientation'
+                  : 'Look around 360° horizontally & vertically (Drag / Swipe)'}
               </span>
             </div>
-          )}
-
-          {/* Drag instruction badge */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-stone-900/85 backdrop-blur-md px-4 py-1.5 rounded-full border border-stone-700 text-stone-300 text-xs font-medium pointer-events-none flex items-center gap-2 shadow-xl whitespace-nowrap">
-            <Sparkles className="w-3.5 h-3.5 text-[#e05d26]" />
-            <span>
-              {isGyroActive
-                ? 'Physically tilt/turn phone or swipe to adjust orientation'
-                : 'Look around 360° horizontally & vertically (Drag / Swipe / Pinch)'}
-            </span>
           </div>
-        </div>
+        )}
 
         {/* Footer info & Room Booking Trigger */}
-        <div className="px-5 py-3.5 bg-stone-900 border-t border-stone-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-white z-20">
-          <div className="flex items-center gap-4 text-xs text-stone-400 w-full sm:w-auto">
+        <div className="px-5 py-4 bg-stone-900 border-t border-stone-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-white z-20">
+          <div className="flex items-center gap-5 text-sm text-stone-400 w-full sm:w-auto">
             <div>
-              <span className="text-[10px] uppercase font-bold text-stone-500 block">
+              <span className="text-xs uppercase font-bold text-stone-400 block">
                 Monthly Rent
               </span>
-              <span className="text-base font-extrabold text-white">
+              <span className="text-lg font-extrabold text-white">
                 ₱{room.price.toLocaleString()}
-                <span className="text-xs font-normal text-stone-400">/mo</span>
+                <span className="text-sm font-normal text-stone-400">/mo</span>
               </span>
             </div>
-            <div className="h-7 w-[1px] bg-stone-800" />
+            <div className="h-8 w-[1px] bg-stone-800" />
             <div>
-              <span className="text-[10px] uppercase font-bold text-stone-500 block">
+              <span className="text-xs uppercase font-bold text-stone-400 block">
                 Available Slots
               </span>
-              <span className="text-xs font-bold text-amber-300">
+              <span className="text-sm font-bold text-amber-300">
                 {room.slotsAvailable} of {room.totalSlots} Slots Free
               </span>
             </div>
-            <div className="h-7 w-[1px] bg-stone-800 hidden md:block" />
+            <div className="h-8 w-[1px] bg-stone-800 hidden md:block" />
             <div className="hidden md:block">
-              <span className="text-[10px] uppercase font-bold text-stone-500 block">
+              <span className="text-xs uppercase font-bold text-stone-400 block">
                 Direct Landlord
               </span>
-              <span className="text-xs font-medium text-stone-300">{room.ownerName}</span>
+              <span className="text-sm font-medium text-stone-200">{room.ownerName}</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+          <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
             <button
               onClick={onClose}
-              className="px-4 py-2 rounded-xl border border-stone-700 text-stone-300 hover:text-white text-xs font-semibold cursor-pointer"
+              className="px-4 py-2.5 rounded-xl border border-stone-700 text-stone-300 hover:text-white text-sm font-semibold cursor-pointer"
             >
               Exit Tour
             </button>
@@ -1048,7 +1103,7 @@ export const VirtualTourModal: React.FC<VirtualTourModalProps> = ({
                 onClose();
                 onRequestRoom(room);
               }}
-              className="px-5 py-2 rounded-xl bg-[#e05d26] hover:bg-[#c94f1c] text-white text-xs font-bold shadow-md shadow-[#e05d26]/30 cursor-pointer"
+              className="px-5 py-2.5 rounded-xl bg-[#e05d26] hover:bg-[#c94f1c] text-white text-sm font-bold shadow-md shadow-[#e05d26]/30 cursor-pointer"
             >
               Request Room Now →
             </button>

@@ -8,12 +8,10 @@ import {
   MapPin,
   ArrowRight,
   Sparkles,
-  Users,
   CheckCircle2,
   Building,
   Key,
 } from 'lucide-react';
-import { AuthMode } from '../types';
 
 interface IntroductionPageProps {
   onEnterApp: () => void;
@@ -64,13 +62,6 @@ export const IntroductionPage: React.FC<IntroductionPageProps> = ({
             </a>
 
             <button
-              onClick={onOpenRenterPortal}
-              className="text-stone-300 hover:text-white text-xs sm:text-sm font-medium transition-colors px-2 py-1 cursor-pointer"
-            >
-              Renter Login
-            </button>
-
-            <button
               onClick={onEnterApp}
               className="px-5 py-2.5 rounded-full bg-[#e05d26] hover:bg-[#c94f1c] text-white text-xs sm:text-sm font-bold tracking-tight shadow-md shadow-[#e05d26]/20 transition-all hover:scale-105 active:scale-95 cursor-pointer flex items-center gap-1.5"
             >
@@ -106,9 +97,9 @@ export const IntroductionPage: React.FC<IntroductionPageProps> = ({
             </p>
 
             {/* CTA action buttons */}
-            <div className="mt-9 flex flex-col sm:flex-row items-center justify-center gap-4">
+            <div className="mt-9 flex flex-col sm:flex-row flex-wrap items-center justify-center gap-4">
               <button
-                onClick={onEnterApp}
+                onClick={onOpenRenterPortal}
                 className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-[#e05d26] hover:bg-[#c94f1c] text-white text-base font-bold shadow-xl shadow-[#e05d26]/30 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2"
               >
                 <span>Find Your Space</span>
@@ -157,33 +148,18 @@ export const IntroductionPage: React.FC<IntroductionPageProps> = ({
             {/* Overlaid Gradient & Badge */}
             <div className="absolute inset-0 bg-gradient-to-t from-[#0a1110] via-transparent to-black/40 pointer-events-none" />
 
-            {/* Floating Live Feature Overlay Card */}
-            <div className="absolute bottom-6 left-6 right-6 sm:right-auto sm:max-w-md bg-stone-950/85 backdrop-blur-md rounded-2xl p-5 border border-amber-500/30 shadow-2xl">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
-                  Featured Room Preview
-                </span>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
-                  2 Slots Free
-                </span>
-              </div>
-              <h3 className="text-lg font-bold text-white">Sunrise Student Residency</h3>
-              <p className="text-xs text-stone-300 mt-1">
-                350m from La Salle University • High-speed Wi-Fi • Air conditioned
-              </p>
-              <div className="mt-4 pt-3 border-t border-stone-800 flex items-center justify-between">
-                <div>
-                  <span className="text-xl font-black text-amber-300">₱2,500</span>
-                  <span className="text-xs text-stone-400"> / month</span>
-                </div>
-                <button
-                  onClick={onEnterApp}
-                  className="px-4 py-2 rounded-xl bg-[#e05d26] hover:bg-[#c94f1c] text-white text-xs font-bold transition cursor-pointer flex items-center gap-1"
-                >
-                  <span>View in App</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
+            {/* Available Rooms: View Overlay */}
+            <div className="absolute bottom-6 left-6 bg-stone-950/85 backdrop-blur-md rounded-2xl px-5 py-3.5 border border-amber-500/30 shadow-2xl flex items-center gap-4">
+              <span className="text-sm sm:text-base font-bold text-white tracking-tight">
+                Available Rooms:
+              </span>
+              <button
+                onClick={onEnterApp}
+                className="px-4 py-2 rounded-xl bg-[#e05d26] hover:bg-[#c94f1c] text-white text-xs sm:text-sm font-bold transition cursor-pointer flex items-center gap-1.5"
+              >
+                <span>View</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
             </div>
           </div>
         </div>

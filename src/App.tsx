@@ -4,8 +4,16 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { INITIAL_ROOMS } from './data/mockRooms';
-import { Room, BookingRequest, AuthMode } from './types';
+import {
+  Room,
+  BookingRequest,
+  AuthMode,
+  RoomMedia,
+  PaymentRecord,
+  OwnerAnnouncement,
+  UserProfile,
+} from './types';
+import { OROQUIETA_CITY_SCHOOLS } from './data/oroquietaSchools';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
 import { FilterRibbon } from './components/FilterRibbon';
@@ -24,73 +32,74 @@ import { IntroductionPage } from './components/IntroductionPage';
 import { RoomUnitsDirectoryModal } from './components/RoomUnitsDirectoryModal';
 import { PaymentAndAnnouncementModal } from './components/PaymentAndAnnouncementModal';
 import { PartnerProgramModal } from './components/PartnerProgramModal';
-import { SubUnit } from './types';
+import { RenterBookingsModal } from './components/RenterBookingsModal';
 
 export default function App() {
   // Navigation & View State (defaults to 'intro' for welcoming new users)
   const [currentView, setCurrentView] = useState<'intro' | 'search' | 'auth' | 'owner-dashboard'>('intro');
-  const [viewMode, setViewMode] = useState<'grid' | 'map'>('grid');
   const [authMode, setAuthMode] = useState<AuthMode>('owner');
-  const [currentUser, setCurrentUser] = useState<{
-    name: string;
-    email: string;
-    role: AuthMode;
-  } | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
 
-  // Data State - initialized from localStorage or defaults for Oroquieta City
+  // Data State - starts empty for both Owners & Renters until owners list their available rooms
   const [rooms, setRooms] = useState<Room[]>(() => {
     try {
-      const saved = localStorage.getItem('vrent_rooms_v2');
+      const saved = localStorage.getItem('vrent_rooms_v4');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Could not read rooms from localStorage', e);
     }
-    return INITIAL_ROOMS;
+    return [];
   });
 
   const [requests, setRequests] = useState<BookingRequest[]>(() => {
     try {
-      const saved = localStorage.getItem('vrent_requests_v2');
+      const saved = localStorage.getItem('vrent_requests_v4');
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Could not read requests from localStorage', e);
     }
-    return [
-      {
-        id: 'req-1',
-        roomId: 'room-1',
-        roomTitle: 'Sunrise Student Haven',
-        roomPrice: 2500,
-        renterName: 'Mark Angelo Gomez',
-        renterEmail: 'm.gomez@student.ustp.edu.ph',
-        renterPhone: '+63 929 112 4433',
-        moveInDate: '2026-11-15',
-        durationMonths: 5,
-        notes: 'BS Information Technology sophomore at USTP Oroquieta Campus. Moving in before 2nd sem classes start.',
-        status: 'pending',
-        createdAt: '2026-11-04',
-      },
-      {
-        id: 'req-2',
-        roomId: 'room-1',
-        roomTitle: 'Sunrise Student Haven',
-        roomPrice: 2500,
-        renterName: 'Clarisse Anne Perez',
-        renterEmail: 'c.perez@student.ustp.edu.ph',
-        renterPhone: '+63 917 882 0019',
-        moveInDate: '2026-11-12',
-        durationMonths: 10,
-        notes: 'BS Agriculture student at USTP Mobod. Assigned to Bedspace A.',
-        status: 'approved',
-        createdAt: '2026-11-02',
-      },
-    ];
+    return [];
   });
 
-  // Persist rooms and booking requests to localStorage
+  const [payments, setPayments] = useState<PaymentRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem('vrent_payments_v4');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Could not read payments from localStorage', e);
+    }
+    return [];
+  });
+
+  const [announcements, setAnnouncements] = useState<OwnerAnnouncement[]>(() => {
+    try {
+      const saved = localStorage.getItem('vrent_announcements_v4');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {
+      console.warn('Could not read announcements from localStorage', e);
+    }
+    return [];
+  });
+
+  // Tracks the active tenant login session so My Bookings starts empty on every tenant log in
+  const [tenantSessionStartMs, setTenantSessionStartMs] = useState<number>(() => Date.now());
+
+  // Clean up legacy localStorage keys once
   useEffect(() => {
     try {
-      localStorage.setItem('vrent_rooms_v2', JSON.stringify(rooms));
+      localStorage.removeItem('vrent_rooms_v2');
+      localStorage.removeItem('vrent_requests_v3');
+      localStorage.removeItem('vrent_payments_v3');
+      localStorage.removeItem('vrent_announcements_v3');
+    } catch {
+      // Ignore storage cleanup errors
+    }
+  }, []);
+
+  // Persist rooms, booking requests, payments, and announcements to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('vrent_rooms_v4', JSON.stringify(rooms));
     } catch (e) {
       console.warn('Could not save rooms to localStorage', e);
     }
@@ -98,14 +107,51 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem('vrent_requests_v2', JSON.stringify(requests));
+      localStorage.setItem('vrent_requests_v4', JSON.stringify(requests));
     } catch (e) {
       console.warn('Could not save requests to localStorage', e);
     }
   }, [requests]);
 
-  // Saved / Bookmarked Rooms (Sunrise Student Haven)
-  const [savedRoomIds, setSavedRoomIds] = useState<string[]>(['room-1']);
+  useEffect(() => {
+    try {
+      localStorage.setItem('vrent_payments_v4', JSON.stringify(payments));
+    } catch (e) {
+      console.warn('Could not save payments to localStorage', e);
+    }
+  }, [payments]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('vrent_announcements_v4', JSON.stringify(announcements));
+    } catch (e) {
+      console.warn('Could not save announcements to localStorage', e);
+    }
+  }, [announcements]);
+
+  // Sync rooms, requests, payments, and announcements live across tabs
+  useEffect(() => {
+    const handleStorageSync = (e: StorageEvent) => {
+      try {
+        if (e.key === 'vrent_rooms_v4' && e.newValue) {
+          setRooms(JSON.parse(e.newValue));
+        } else if (e.key === 'vrent_requests_v4' && e.newValue) {
+          setRequests(JSON.parse(e.newValue));
+        } else if (e.key === 'vrent_payments_v4' && e.newValue) {
+          setPayments(JSON.parse(e.newValue));
+        } else if (e.key === 'vrent_announcements_v4' && e.newValue) {
+          setAnnouncements(JSON.parse(e.newValue));
+        }
+      } catch {
+        // Ignore malformed cross-tab payloads
+      }
+    };
+    window.addEventListener('storage', handleStorageSync);
+    return () => window.removeEventListener('storage', handleStorageSync);
+  }, []);
+
+  // Saved / Bookmarked Rooms (empty on each session until renter saves rooms)
+  const [savedRoomIds, setSavedRoomIds] = useState<string[]>([]);
 
   // Filter State
   const [searchQuery, setSearchQuery] = useState('');
@@ -114,10 +160,12 @@ export default function App() {
   const [withinDistance, setWithinDistance] = useState<number | 'any'>('any');
   const [maxRent, setMaxRent] = useState<number | 'any'>('any');
   const [selectedType, setSelectedType] = useState<string>('all');
+  const [selectedGender, setSelectedGender] = useState<string>('all');
+  const [selectedUtilities, setSelectedUtilities] = useState<string>('all');
+  const [selectedSchool, setSelectedSchool] = useState<string>('all');
   const [isLocating, setIsLocating] = useState(false);
 
   // Active Modals & Selection
-  const [selectedMapRoom, setSelectedMapRoom] = useState<Room | null>(null);
   const [active360Room, setActive360Room] = useState<Room | null>(null);
   const [activeDirectionsRoom, setActiveDirectionsRoom] = useState<Room | null>(null);
   const [activeBookingRoom, setActiveBookingRoom] = useState<Room | null>(null);
@@ -126,7 +174,12 @@ export default function App() {
   const [activeDirectoryRoom, setActiveDirectoryRoom] = useState<Room | null>(null);
   const [activePaymentRoom, setActivePaymentRoom] = useState<Room | null>(null);
   const [showPartnerModal, setShowPartnerModal] = useState(false);
+  const [showRenterBookingsModal, setShowRenterBookingsModal] = useState(false);
   const [prefilledUnitNumber, setPrefilledUnitNumber] = useState<string | undefined>(undefined);
+  const [pendingUnitBooking, setPendingUnitBooking] = useState<{
+    room: Room;
+    unitNumber: string;
+  } | null>(null);
   const [showSavedModal, setShowSavedModal] = useState(false);
   const [bookingPrefilledDates, setBookingPrefilledDates] = useState<{
     startDate: string;
@@ -153,26 +206,176 @@ export default function App() {
     );
   };
 
-  // Open Auth Portal
+  // Open Auth Portal (or jump straight to owner dashboard if already logged in as owner)
   const handleOpenAuth = (mode: AuthMode) => {
+    if (mode === 'owner' && currentUser?.role === 'owner') {
+      setCurrentView('owner-dashboard');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
     setAuthMode(mode);
     setCurrentView('auth');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Login Success
-  const handleLoginSuccess = (user: { name: string; email: string; role: AuthMode }) => {
+  // Login Success (with optional owner-uploaded room video/panorama media & permit verification)
+  const handleLoginSuccess = (
+    user: UserProfile,
+    uploadedMedia?: { roomId: string; media: RoomMedia },
+    ownerVerification?: { idType: string; docUrl: string }
+  ) => {
     setCurrentUser(user);
+    if (uploadedMedia || ownerVerification) {
+      const loginEmail = user.email.trim().toLowerCase();
+      setRooms((prev) =>
+        prev.map((r) => {
+          const isOwnersRoom = (r.ownerEmail || '').trim().toLowerCase() === loginEmail;
+          return {
+            ...r,
+            ...(uploadedMedia && r.id === uploadedMedia.roomId
+              ? { roomMedia: uploadedMedia.media }
+              : {}),
+            ...(ownerVerification && isOwnersRoom
+              ? {
+                  ownerIdType: ownerVerification.idType,
+                  ownerVerificationDocUrl: ownerVerification.docUrl,
+                  ownerVerified: true,
+                }
+              : {}),
+          };
+        })
+      );
+    }
     if (user.role === 'owner') {
+      setPendingUnitBooking(null);
       setCurrentView('owner-dashboard');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
+      setTenantSessionStartMs(Date.now());
+      setSavedRoomIds([]);
+      handleResetFilters();
+      // Automatically show rental houses near the student's selected Oroquieta City school
+      setSelectedSchool(user.school || 'all');
       setCurrentView('search');
+      if (pendingUnitBooking) {
+        const queued = pendingUnitBooking;
+        setPendingUnitBooking(null);
+        setPrefilledUnitNumber(queued.unitNumber);
+        setActiveBookingRoom(queued.room);
+      } else {
+        setTimeout(() => {
+          const el = document.getElementById('listings-section');
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth' });
+          } else {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }
+        }, 60);
+      }
     }
   };
 
-  // Filtered rooms
+  // Handle Log out -> always return user to Log In portal
+  const handleLogout = () => {
+    const prevRole = currentUser?.role || 'renter';
+    setCurrentUser(null);
+    setSavedRoomIds([]);
+    setSelectedSchool('all');
+    setTenantSessionStartMs(Date.now());
+    setAuthMode(prevRole);
+    setCurrentView('auth');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Requests & payments scoped to the current tenant login session (empty on each new tenant login)
+  const tenantVisibleRequests = useMemo(() => {
+    return requests.filter((req) => {
+      const tsPart = Number(req.id.replace('req-', ''));
+      const inCurrentSession = !Number.isNaN(tsPart) && tsPart >= tenantSessionStartMs;
+      if (!inCurrentSession) return false;
+      if (currentUser?.role === 'renter') {
+        return req.renterEmail.toLowerCase() === currentUser.email.toLowerCase();
+      }
+      return true;
+    });
+  }, [requests, tenantSessionStartMs, currentUser]);
+
+  const tenantVisiblePayments = useMemo(() => {
+    return payments.filter((pay) => {
+      const tsPart = Number(pay.id.replace('pay-', ''));
+      return !Number.isNaN(tsPart) && tsPart >= tenantSessionStartMs;
+    });
+  }, [payments, tenantSessionStartMs]);
+
+  // Scope Owner Dashboard data strictly to the currently logged-in owner
+  // so every newly registered owner starts with a completely empty dashboard.
+  const currentOwnerEmail =
+    currentUser?.role === 'owner' ? currentUser.email.trim().toLowerCase() : '';
+
+  const ownerRooms = useMemo(() => {
+    if (!currentOwnerEmail) return [];
+    return rooms.filter(
+      (r) => (r.ownerEmail || '').trim().toLowerCase() === currentOwnerEmail
+    );
+  }, [rooms, currentOwnerEmail]);
+
+  const ownerRequests = useMemo(() => {
+    if (!currentOwnerEmail) return [];
+    const ownerRoomIds = new Set(ownerRooms.map((r) => r.id));
+    return requests.filter(
+      (req) =>
+        ownerRoomIds.has(req.roomId) ||
+        (req.ownerEmail || '').trim().toLowerCase() === currentOwnerEmail
+    );
+  }, [requests, ownerRooms, currentOwnerEmail]);
+
+  const ownerPayments = useMemo(() => {
+    if (!currentOwnerEmail) return [];
+    const ownerRoomIds = new Set(ownerRooms.map((r) => r.id));
+    return payments.filter(
+      (pay) =>
+        (pay.roomId && ownerRoomIds.has(pay.roomId)) ||
+        (pay.ownerEmail || '').trim().toLowerCase() === currentOwnerEmail
+    );
+  }, [payments, ownerRooms, currentOwnerEmail]);
+
+  const ownerAnnouncements = useMemo(() => {
+    if (!currentOwnerEmail) return [];
+    return announcements.filter(
+      (ann) => (ann.ownerEmail || '').trim().toLowerCase() === currentOwnerEmail
+    );
+  }, [announcements, currentOwnerEmail]);
+
+  // Filtered rooms (strictly Oroquieta City only + school/filter matching)
   const filteredRooms = useMemo(() => {
     return rooms.filter((room) => {
+      // Strictly Oroquieta City only
+      if (!room.city.toLowerCase().includes('oroquieta')) {
+        return false;
+      }
+
+      // Near School filter
+      if (selectedSchool !== 'all') {
+        const schoolObj = OROQUIETA_CITY_SCHOOLS.find((s) => s.name === selectedSchool);
+        if (room.nearSchool) {
+          const matchesExplicit =
+            room.nearSchool.toLowerCase() === selectedSchool.toLowerCase() ||
+            (schoolObj
+              ? room.nearSchool.toLowerCase().includes(schoolObj.shortName.toLowerCase())
+              : false);
+          if (!matchesExplicit) return false;
+        } else if (schoolObj) {
+          const hay = `${room.landmark} ${room.location} ${room.barangay}`.toLowerCase();
+          const matchesArea =
+            hay.includes(schoolObj.shortName.toLowerCase()) ||
+            hay.includes(schoolObj.name.toLowerCase()) ||
+            hay.includes(schoolObj.barangay.toLowerCase());
+          if (!matchesArea) return false;
+        } else {
+          return false;
+        }
+      }
+
       // Search Query filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
@@ -181,6 +384,7 @@ export default function App() {
           room.location.toLowerCase().includes(q) ||
           room.city.toLowerCase().includes(q) ||
           room.landmark.toLowerCase().includes(q) ||
+          (room.nearSchool || '').toLowerCase().includes(q) ||
           room.type.toLowerCase().includes(q) ||
           room.amenities.some((a) => a.toLowerCase().includes(q));
 
@@ -207,14 +411,46 @@ export default function App() {
         return false;
       }
 
-      // Ribbon Tag filter
-      if (activeTag && !room.tags.includes(activeTag)) {
+      // Gender Policy filter
+      if (selectedGender !== 'all' && (room.genderPolicy || 'Mixed') !== selectedGender) {
         return false;
+      }
+
+      // Utilities Included filter
+      if (
+        selectedUtilities !== 'all' &&
+        (room.utilitiesIncluded || 'Water Included, Electric Submetered') !== selectedUtilities
+      ) {
+        return false;
+      }
+
+      // Ribbon Tag filter (supports both tags and gender/water badges)
+      if (activeTag) {
+        const matchesTag = room.tags.includes(activeTag);
+        const matchesGender = room.genderPolicy === activeTag;
+        const matchesWater =
+          activeTag === 'Water Included' &&
+          room.utilitiesIncluded !== undefined &&
+          room.utilitiesIncluded !== 'Submetered';
+        if (!matchesTag && !matchesGender && !matchesWater) {
+          return false;
+        }
       }
 
       return true;
     });
-  }, [rooms, searchQuery, activeCity, withinDistance, maxRent, selectedType, activeTag]);
+  }, [
+    rooms,
+    selectedSchool,
+    searchQuery,
+    activeCity,
+    withinDistance,
+    maxRent,
+    selectedType,
+    selectedGender,
+    selectedUtilities,
+    activeTag,
+  ]);
 
   // Saved rooms list
   const savedRooms = useMemo(() => {
@@ -226,14 +462,95 @@ export default function App() {
     setRooms((prev) => [newRoom, ...prev]);
   };
 
-  // Update Request status
+  // Update room handler (for owners editing existing rooms)
+  const handleUpdateRoom = (updatedRoom: Room) => {
+    setRooms((prev) =>
+      prev.map((r) => (r.id === updatedRoom.id ? updatedRoom : r))
+    );
+  };
+
+  // Delete room handler (for owners removing rooms)
+  const handleDeleteRoom = (roomId: string) => {
+    setRooms((prev) => prev.filter((r) => r.id !== roomId));
+  };
+
+  // Update Request status + Atomic Slot & Sub-Unit Sync on Approval
   const handleUpdateRequestStatus = (
     requestId: string,
     newStatus: 'approved' | 'declined'
   ) => {
+    const targetReq = requests.find((r) => r.id === requestId);
     setRequests((prev) =>
       prev.map((r) => (r.id === requestId ? { ...r, status: newStatus } : r))
     );
+
+    if (newStatus === 'approved' && targetReq && targetReq.status !== 'approved') {
+      setRooms((prev) =>
+        prev.map((room) => {
+          if (room.id !== targetReq.roomId) return room;
+
+          const nextSlots = Math.max(0, room.slotsAvailable - 1);
+          let assignedOne = false;
+          const nextSubUnits = room.subUnits?.map((unit) => {
+            if (assignedOne) return unit;
+            const exactMatch =
+              targetReq.unitNumber &&
+              unit.unitNumber.toLowerCase() === targetReq.unitNumber.toLowerCase();
+            const fallbackAvailable = !targetReq.unitNumber && unit.status === 'available';
+            if (exactMatch || fallbackAvailable) {
+              assignedOne = true;
+              return {
+                ...unit,
+                status: 'occupied' as const,
+                currentTenant: targetReq.renterName,
+              };
+            }
+            return unit;
+          });
+
+          return {
+            ...room,
+            slotsAvailable: nextSlots,
+            subUnits: nextSubUnits,
+            occupiedPeriods: [
+              ...room.occupiedPeriods,
+              {
+                startDate: targetReq.moveInDate,
+                endDate: targetReq.moveOutDate || targetReq.moveInDate,
+                label: `Approved: ${targetReq.unitNumber || 'Bedspace'} (${targetReq.renterName})`,
+                renterName: targetReq.renterName,
+              },
+            ],
+          };
+        })
+      );
+    }
+  };
+
+  // Submit & Verify Payment Receipts
+  const handleSubmitPayment = (paymentData: Omit<PaymentRecord, 'id' | 'paidDate'>) => {
+    const newPayment: PaymentRecord = {
+      ...paymentData,
+      id: `pay-${Date.now()}`,
+      paidDate: new Date().toISOString().split('T')[0],
+    };
+    setPayments((prev) => [newPayment, ...prev]);
+  };
+
+  const handleVerifyPayment = (paymentId: string) => {
+    setPayments((prev) =>
+      prev.map((p) => (p.id === paymentId ? { ...p, status: 'confirmed' } : p))
+    );
+  };
+
+  // Broadcast Announcement handler
+  const handleAddAnnouncement = (ann: Omit<OwnerAnnouncement, 'id' | 'date'>) => {
+    const newAnn: OwnerAnnouncement = {
+      ...ann,
+      id: `ann-${Date.now()}`,
+      date: new Date().toISOString().split('T')[0],
+    };
+    setAnnouncements((prev) => [newAnn, ...prev]);
   };
 
   // Submit new booking request
@@ -256,6 +573,9 @@ export default function App() {
     setWithinDistance('any');
     setMaxRent('any');
     setSelectedType('all');
+    setSelectedGender('all');
+    setSelectedUtilities('all');
+    setSelectedSchool('all');
   };
 
   return (
@@ -265,7 +585,14 @@ export default function App() {
         <IntroductionPage
           onEnterApp={() => {
             setCurrentView('search');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            setTimeout(() => {
+              const el = document.getElementById('listings-section');
+              if (el) {
+                el.scrollIntoView({ behavior: 'smooth' });
+              } else {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }
+            }, 60);
           }}
           onOpenOwnerPortal={() => handleOpenAuth('owner')}
           onOpenRenterPortal={() => handleOpenAuth('renter')}
@@ -273,7 +600,10 @@ export default function App() {
             setActiveCity(city);
             setSearchQuery(city);
             setCurrentView('search');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            setTimeout(() => {
+              const el = document.getElementById('listings-section');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }, 60);
           }}
         />
       ) : (
@@ -289,11 +619,10 @@ export default function App() {
             onOpenAuth={handleOpenAuth}
             savedCount={savedRoomIds.length}
             onOpenSaved={() => setShowSavedModal(true)}
+            myBookingsCount={tenantVisibleRequests.length}
+            onOpenMyBookings={() => setShowRenterBookingsModal(true)}
             currentUser={currentUser}
-            onLogout={() => {
-              setCurrentUser(null);
-              setCurrentView('search');
-            }}
+            onLogout={handleLogout}
           />
 
           {/* Main View Router */}
@@ -322,19 +651,22 @@ export default function App() {
               onTagToggle={(tag) => setActiveTag((prev) => (prev === tag ? null : tag))}
             />
 
-            {/* All Available Rooms Section (Grid + Map View) */}
+            {/* All Available Rooms Section */}
             <RoomList
               rooms={filteredRooms}
-              viewMode={viewMode}
-              onViewModeChange={setViewMode}
+              currentUser={currentUser}
               withinDistance={withinDistance}
               onChangeDistance={setWithinDistance}
               maxRent={maxRent}
               onChangeMaxRent={setMaxRent}
               selectedType={selectedType}
               onChangeType={setSelectedType}
-              selectedRoom={selectedMapRoom}
-              onSelectRoom={setSelectedMapRoom}
+              selectedGender={selectedGender}
+              onChangeGender={setSelectedGender}
+              selectedUtilities={selectedUtilities}
+              onChangeUtilities={setSelectedUtilities}
+              selectedSchool={selectedSchool}
+              onChangeSchool={setSelectedSchool}
               onOpen360={(room) => setActive360Room(room)}
               onOpenCalendar={(room) => setActiveCalendarRoom(room)}
               onOpenChat={(room) => setActiveChatRoom(room)}
@@ -359,22 +691,38 @@ export default function App() {
         {currentView === 'auth' && (
           <AuthPortal
             initialMode={authMode}
-            onBackToSearch={() => setCurrentView('search')}
             onLoginSuccess={handleLoginSuccess}
           />
         )}
 
         {currentView === 'owner-dashboard' && (
           <OwnerDashboard
-            rooms={rooms}
-            requests={requests}
+            rooms={ownerRooms}
+            requests={ownerRequests}
+            payments={ownerPayments}
+            announcements={ownerAnnouncements}
             onAddRoom={handleAddRoom}
+            onUpdateRoom={handleUpdateRoom}
+            onDeleteRoom={handleDeleteRoom}
+            onViewRoomMedia={(room) => setActive360Room(room)}
             onUpdateStatus={handleUpdateRequestStatus}
-            onBackToSearch={() => {
-              setCurrentView('search');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
+            onClearRequests={() => {
+              const ownerRoomIds = new Set(ownerRooms.map((r) => r.id));
+              setRequests((prev) =>
+                prev.filter(
+                  (req) =>
+                    !ownerRoomIds.has(req.roomId) &&
+                    (req.ownerEmail || '').trim().toLowerCase() !== currentOwnerEmail
+                )
+              );
             }}
-            ownerName={currentUser?.name || 'Mrs. Remedios Santos'}
+            onVerifyPayment={handleVerifyPayment}
+            onAddAnnouncement={handleAddAnnouncement}
+            onLogout={handleLogout}
+            ownerName={currentUser?.name || 'Host Landlord'}
+            ownerEmail={currentUser?.email || ''}
+            ownerIdType={currentUser?.ownerIdType}
+            ownerDocUrl={currentUser?.ownerVerificationDocUrl}
             onOpenPartnerVisitModal={() => setShowPartnerModal(true)}
           />
         )}
@@ -448,6 +796,11 @@ export default function App() {
           onSubmitRequest={handleSubmitBookingRequest}
           defaultUserName={currentUser?.name || ''}
           defaultUserEmail={currentUser?.email || ''}
+          defaultAge={currentUser?.age}
+          defaultGender={currentUser?.gender}
+          defaultSchool={currentUser?.school}
+          defaultStudentIdPhotoUrl={currentUser?.studentIdPhotoUrl}
+          defaultStudentIdFileName={currentUser?.studentIdFileName}
           initialMoveInDate={bookingPrefilledDates?.startDate}
           initialDurationMonths={bookingPrefilledDates?.durationMonths}
           initialUnitNumber={prefilledUnitNumber}
@@ -465,24 +818,46 @@ export default function App() {
           }}
           onRequestUnit={(room, unit) => {
             setActiveDirectoryRoom(null);
+            if (!currentUser) {
+              setPendingUnitBooking({ room, unitNumber: unit.unitNumber });
+              setAuthMode('renter');
+              setCurrentView('auth');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+              return;
+            }
             setPrefilledUnitNumber(unit.unitNumber);
             setActiveBookingRoom(room);
           }}
         />
       )}
 
-      {/* Payment & Owner Announcement Modal (Requirement #4) */}
+      {/* Payment & Owner Announcement Modal */}
       {activePaymentRoom && (
         <PaymentAndAnnouncementModal
           room={activePaymentRoom}
+          announcements={announcements.filter(
+            (a) =>
+              !a.ownerEmail ||
+              !activePaymentRoom.ownerEmail ||
+              a.ownerEmail.toLowerCase() === activePaymentRoom.ownerEmail.toLowerCase()
+          )}
           onClose={() => setActivePaymentRoom(null)}
-          onSubmitPayment={(paymentData) => {
-            console.log('Payment registered:', paymentData);
-          }}
+          onSubmitPayment={handleSubmitPayment}
         />
       )}
 
-      {/* Partner Visit & 360 Capture Request Modal (Requirement #2) */}
+      {/* Renter My Bookings, Receipts & Notices Modal */}
+      {showRenterBookingsModal && (
+        <RenterBookingsModal
+          requests={tenantVisibleRequests}
+          payments={tenantVisiblePayments}
+          announcements={announcements}
+          currentUserEmail={currentUser?.role === 'renter' ? currentUser.email : undefined}
+          onClose={() => setShowRenterBookingsModal(false)}
+        />
+      )}
+
+      {/* Partner Visit & 360 Capture Request Modal */}
       {showPartnerModal && (
         <PartnerProgramModal
           onClose={() => setShowPartnerModal(false)}
